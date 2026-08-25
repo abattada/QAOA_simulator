@@ -13,11 +13,11 @@ No quantum SDK, no external libraries — every gate kernel is hand-written C++,
 
 ## Highlights
 
-- **Hand-rolled state-vector engine.** `createState` allocates the full `2^n` complex amplitude array; `H`, `Rx`, `Rz`, `CNOT` and `CP` are implemented directly on it. The core trick is a branch-free *bit-insertion* index map (`insert_bit_0/1`) that enumerates each amplitude pair exactly once, so every gate is a single embarrassingly-parallel loop with unit-stride-friendly access — no gate matrices, no copies of the state.
-- **Two-level OpenMP parallelism.** Gate kernels parallelize over amplitudes, and the driver parallelizes over the entire `(γ, β)` grid with `collapse(2) schedule(dynamic)` — up to 400 independent circuit instances dispatched across cores. OpenMP's default handling of nested regions means the two levels compose cleanly: a single circuit still uses all cores through the gate kernels, while a grid search saturates them at the circuit level with no oversubscription.
+- **Hand-rolled state-vector engine.** `createState` allocates the full `2^n` complex amplitude array; `H`, `Rx`, `Rz`, `CNOT` and `CP` are implemented directly on it. The paired-amplitude kernels (`H`, `Rx`, `CNOT`) enumerate each amplitude pair exactly once through a branch-free *bit-insertion* index map (`insert_bit_0/1`), and the diagonal `Rz` applies its phase in one full-range loop — each kernel is a single pass over the state, with no gate matrices and no copies of the state.
+- **Two-level OpenMP parallelism.** Gate kernels carry amplitude-level `parallel for` loops, and the driver parallelizes over the entire `(γ, β)` grid with `collapse(2) schedule(dynamic)` — up to 400 independent circuit instances dispatched across cores. Since OpenMP keeps nested regions serial by default, the grid level cleanly takes over during a search: each circuit runs on its own core, cores stay saturated, and there is no oversubscription.
 - **Competitive with an established simulator.** Head-to-head against QuEST running the identical circuit and grid search: faster at every size up to 14 qubits, and faster again at 22–24 qubits where the runs take the better part of an hour (see [Benchmarks](#benchmarks-vs-quest)).
 - **Optimal cuts on every benchmark.** On the HamLib complete-bipartite instances `K_{N,N}` (where the optimum is known: cut *all* `N²` edges), the p=1 grid search finds the exact optimum on all nine instances from 8 to 24 qubits.
-- **Cheap measurement via marginal sampling.** Per-qubit marginals are computed in one pass over the state, after which each additional shot costs only O(n) — see [Approximations](#approximations-under-the-hood).
+- **Cheap measurement via marginal sampling.** Per-qubit marginals `P(qᵢ=0)` are computed once per grid point (one sweep over the state per qubit, the sweeps parallelized), after which each additional shot costs only O(n) — see [Approximations](#approximations-under-the-hood).
 - **Complete, reproducible pipeline.** Dataset download (PennyLane HamLib) → C++ simulation → CSV export → publication-ready heatmaps and benchmark figures, each step a single command.
 
 ## The algorithm in one paragraph
@@ -42,11 +42,11 @@ Three deliberate approximations keep the search fast; each is a conscious trade-
 
 2. **Grid search instead of a gradient optimizer.** The standard variational loop (gradient descent / COBYLA on `⟨H_C⟩`) is sequential: each parameter update waits for the previous evaluation. A fixed 20×20 grid gives up adaptivity in exchange for **400 completely independent evaluations** — a perfect fit for `#pragma omp parallel for collapse(2)`, and it produces the full landscape heatmap as a free by-product.
 
-3. **Independent-marginal measurement sampling.** Exact multi-shot sampling either re-collapses the state per shot or builds a cumulative distribution over all `2^n` amplitudes. Instead, the simulator computes each qubit's marginal `P(qᵢ = 0)` in one parallel pass over the state, then draws every shot as `n` independent Bernoulli samples — O(n) per shot instead of O(2^n). This is a mean-field-style approximation: inter-qubit correlations of the joint distribution are dropped at sampling time (the state evolution itself is exact). For cut statistics on these instances it is empirically excellent — it is the sampler that recovered the optimal cut on all nine benchmarks. Each grid point reports the best cut over its shots.
+3. **Independent-marginal measurement sampling.** Exact multi-shot sampling either re-collapses the state per shot or builds a cumulative distribution over all `2^n` amplitudes. Instead, the simulator computes each qubit's marginal `P(qᵢ = 0)` up front (one sweep over the amplitudes per qubit, the `n` sweeps running in parallel), then draws every shot as `n` independent Bernoulli samples — O(n) per shot instead of O(2^n). This is a mean-field-style approximation: inter-qubit correlations of the joint distribution are dropped at sampling time (the state evolution itself is exact). For cut statistics on these instances it is empirically excellent — it is the sampler that recovered the optimal cut on all nine benchmarks. Each grid point reports the best cut over its shots.
 
 ## Benchmarks vs QuEST
 
-**Setup.** Identical workload for both simulators: the p=1 QAOA circuit with a full 20×20 `(γ, β)` grid search per graph, on complete-bipartite HamLib graphs from 4 to 24 qubits, timed with `time(1)` on the same 12-thread CPU. The QuEST reference implementation, raw timing records, and QuEST outputs are in [benchmarks/](benchmarks/).
+**Setup.** Identical workload for both simulators: the p=1 QAOA circuit with a full 20×20 `(γ, β)` grid search per graph, on complete-bipartite HamLib graphs from 4 to 24 qubits, timed with `time(1)` on the same 12-thread CPU. The raw timing records, the QuEST grid outputs, and the memory screenshots from the comparison are in [benchmarks/](benchmarks/).
 
 | qubits | edges | **this work** (wall) | QuEST (wall) | **this work** (CPU) | QuEST (CPU) |
 |:-:|:-:|:-:|:-:|:-:|:-:|
@@ -56,7 +56,7 @@ Three deliberate approximations keep the search fast; each is a conscious trade-
 
 Below 16 qubits this simulator wins by up to an order of magnitude (near-zero startup cost); QuEST takes the middle sizes; from 22 qubits upward this simulator pulls ahead again — at 24 qubits it saves **15 minutes of wall-clock per graph**. Full curves are in the figure at the top.
 
-**Memory trade-off.** The grid-level parallelism keeps one state vector alive per thread (~12 concurrent `(γ, β)` evaluations), so peak memory is roughly 12 state vectors versus QuEST's single one — memory deliberately traded for wall-clock speed. System-monitor screenshots backing these numbers are in [benchmarks/memory_screenshots/](benchmarks/memory_screenshots/).
+**Memory trade-off.** The grid-level parallelism keeps one state vector alive per thread (~12 concurrent `(γ, β)` evaluations), so peak memory is roughly 12 state vectors versus QuEST's single one — memory deliberately traded for wall-clock speed. System-monitor screenshots backing these numbers are in [benchmarks/memory_screenshots/](benchmarks/memory_screenshots/). (One quirk in the record: the 20-qubit QuEST reading of 33 MB is about twice the 16.8 MB theoretical state size, while its 18- and 22-qubit readings match theory; the value is reported exactly as measured.)
 
 ![Memory benchmark](docs/figures/memory_benchmark.png)
 
@@ -72,7 +72,7 @@ make
 ./qaoa_main qml_bi_10 1 20
 ```
 
-The full grid log is written to `results/qml_bi_10/1_20_0` (named `<shots>_<steps>_<run>`), and a summary is echoed to the terminal:
+The full grid log is written to `results/qml_bi_10/<shots>_<steps>_<run>`, where the run index auto-increments so existing logs are never overwritten (this repo ships runs `1_20_0`–`1_20_2`, so a fresh clone's first run lands at `1_20_3`). A summary is echoed to the terminal:
 
 ```
 =========================================
@@ -91,7 +91,7 @@ The full grid log is written to `results/qml_bi_10/1_20_0` (named `<shots>_<step
 ```bash
 pip install matplotlib numpy
 
-python3 scripts/plot_heatmap.py results/qml_bi_10/1_20_0   # landscape heatmap
+python3 scripts/plot_heatmap.py results/qml_bi_10/1_20_0   # landscape heatmap, written next to the log
 python3 scripts/transform_to_csv.py results/qml_bi_10/1_20_0  # grid log → CSV
 python3 scripts/plot_time.py                               # runtime benchmark figure
 python3 scripts/plot_memory.py                             # memory benchmark figure
@@ -113,7 +113,7 @@ python3 scripts/download_maxcut.py      # fetch HamLib MaxCut graphs via PennyLa
 QAOA_simulator/
 ├── src/                    # C++17 state-vector engine + QAOA driver
 │   ├── state.{hpp,cpp}       # 2^n amplitude array, |0…0⟩ initialization
-│   ├── circuit.{hpp,cpp}     # H, Rx, Rz, CNOT, CP gate kernels (OpenMP)
+│   ├── circuit.{hpp,cpp}     # H, Rx, Rz, CNOT gate kernels (OpenMP), plus CP
 │   └── main.cpp              # p=1 QAOA, (γ, β) grid search, marginal sampling
 ├── scripts/                # Python tooling (download, CSV, figures)
 ├── graph/                  # bundled benchmark graphs (K_{N,N}, 2–50 qubits)

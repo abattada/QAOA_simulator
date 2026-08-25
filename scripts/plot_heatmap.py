@@ -4,6 +4,10 @@ Reads a raw simulator output file (results/<graph>/<shots>_<steps>_<run>),
 pivots the grid into a matrix and draws the cut value found at every
 (gamma, beta) sample, with the best parameter point ringed.
 
+By default the image is written next to the result file
+(results/qml_bi_10/1_20_0 -> results/qml_bi_10/1_20_0.png); pass -o to
+regenerate the README gallery figures in docs/figures/heatmaps/.
+
 Usage:
     python3 scripts/plot_heatmap.py results/qml_bi_10/1_20_0 [-o out.png]
 """
@@ -46,7 +50,7 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("result_file", help="raw simulator output file")
     parser.add_argument("-o", "--output", default=None,
-                        help="output image path (default: docs/figures/heatmaps/<graph>.png)")
+                        help="output image path (default: <result_file>.png)")
     args = parser.parse_args()
 
     samples, meta = parse_result(args.result_file)
@@ -86,13 +90,13 @@ def main():
 
     n = int(meta["qubits"])
     ax.set_title(f"{meta['graph']} — {n} qubits, {int(meta['edges'])} edges",
-                 color=INK_PRIMARY, fontsize=13, pad=16, loc="left")
+                 color=INK_PRIMARY, fontsize=13, pad=28, loc="left")
     ax.text(0, 1.02, f"best cut {int(meta['best_cut'])} at "
             f"γ={meta['best_gamma']:.2f}, β={meta['best_beta']:.2f}"
             f"  (○)",
             transform=ax.transAxes, color=INK_MUTED, fontsize=9)
 
-    out = args.output or f"docs/figures/heatmaps/{meta['graph']}.png"
+    out = args.output or f"{args.result_file}.png"
     Path(out).parent.mkdir(parents=True, exist_ok=True)
     fig.savefig(out, dpi=160, bbox_inches="tight", facecolor=SURFACE)
     print(f"wrote {out}")

@@ -29,8 +29,8 @@ parsed_data.sort(key=lambda x: (float(x[0]), float(x[1])))
 with open(args.file_name+'.csv', 'w', newline='', encoding='utf-8') as csvfile:
     writer = csv.writer(csvfile)
     # 寫入欄位名稱
-    writer.writerow(["Gamma", "Beta", "Tmp Cut"])
+    writer.writerow(["Gamma", "Beta", "Max Cut"])
     # 寫入每一行資料
     writer.writerows(parsed_data)
 
-print(f"解析並排序完成，結果已存為 {args.file_name+'.csv'}。")
+print(f"wrote {args.file_name}.csv ({len(parsed_data)} rows)")

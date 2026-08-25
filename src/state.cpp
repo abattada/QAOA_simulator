@@ -9,9 +9,9 @@ void createState(State& state, const int& numQubits) {
 }
 
 void printState(const State& state, int num) {
-    freopen("/dev/tty", "w", stdout);
+    // Debug helper: print to stderr so it bypasses any stdout redirection
     for (int i = 0; i < num; i++) {
-        printf("Statevec idx: %d, real: %f, imag: %f\n", i, state.stateVec[i].real, state.stateVec[i].imag);
+        fprintf(stderr, "Statevec idx: %d, real: %f, imag: %f\n", i, state.stateVec[i].real, state.stateVec[i].imag);
     }
     return;
 }

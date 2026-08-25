@@ -144,7 +144,11 @@ int main(int argc, char* argv[]) {
                                 + std::to_string(increment) );
         if (!fs::exists(candidate)) {
             // 找到可用的檔名後，將 stdout 導向該檔案
-            freopen(candidate.string().c_str(), "w", stdout);
+            if (!freopen(candidate.string().c_str(), "w", stdout)) {
+                std::cerr << "Error: could not open output file "
+                          << candidate.string() << std::endl;
+                return 1;
+            }
             break;
         }
         increment++;
@@ -159,14 +163,19 @@ int main(int argc, char* argv[]) {
 
     int numQubits = 0;
     int numEdges = 0;
-    fscanf(f, "%d", &numQubits);
-    fscanf(f, "%d", &numEdges);
+    if (fscanf(f, "%d", &numQubits) != 1 || fscanf(f, "%d", &numEdges) != 1) {
+        std::cerr << "Error: malformed graph file header in " << file_path << std::endl;
+        return 1;
+    }
 
     std::vector<std::pair<int,int>> edges;
     edges.reserve(numEdges);
     for (int i = 0; i < numEdges; i++) {
         int a, b;
-        fscanf(f, "%d %d", &a, &b);
+        if (fscanf(f, "%d %d", &a, &b) != 2) {
+            std::cerr << "Error: malformed edge list in " << file_path << std::endl;
+            return 1;
+        }
         edges.push_back({a, b});
     }
     fclose(f);
@@ -239,33 +248,23 @@ int main(int argc, char* argv[]) {
         }
     }
 
-    // Output summary
-    std::cout << "=========================================\n";
-    std::cout << " QAOA (p=1) with " << numQubits << " qubits.\n";
-    std::cout << " Input graph: " << input_name 
-              << " (edges=" << edges.size() << ")\n";
-    std::cout << " Grid search steps = " << steps 
-              << ", shots = " << shots << std::endl;
-    std::cout << "-----------------------------------------\n";
-    std::cout << " Best found cut   = " << bestCut << "\n";
-    std::cout << " Best gamma       = " << bestGamma << "\n";
-    std::cout << " Best beta        = " << bestBeta  << "\n";
-    std::cout << "=========================================\n";
+    // Output summary: once into the results file (stdout), once to the
+    // terminal (stderr), so it stays visible even when stdout is redirected.
+    std::stringstream summary;
+    summary << "=========================================\n";
+    summary << " QAOA (p=1) with " << numQubits << " qubits.\n";
+    summary << " Input graph: " << input_name
+            << " (edges=" << edges.size() << ")\n";
+    summary << " Grid search steps = " << steps
+            << ", shots = " << shots << "\n";
+    summary << "-----------------------------------------\n";
+    summary << " Best found cut   = " << bestCut << "\n";
+    summary << " Best gamma       = " << bestGamma << "\n";
+    summary << " Best beta        = " << bestBeta  << "\n";
+    summary << "=========================================\n";
 
-    freopen("/dev/tty", "w", stdout);
-
-    // Output summary
-    std::cout << "=========================================\n";
-    std::cout << " QAOA (p=1) with " << numQubits << " qubits.\n";
-    std::cout << " Input graph: " << input_name 
-              << " (edges=" << edges.size() << ")\n";
-    std::cout << " Grid search steps = " << steps 
-              << ", shots = " << shots << std::endl;
-    std::cout << "-----------------------------------------\n";
-    std::cout << " Best found cut   = " << bestCut << "\n";
-    std::cout << " Best gamma       = " << bestGamma << "\n";
-    std::cout << " Best beta        = " << bestBeta  << "\n";
-    std::cout << "=========================================\n";
+    std::cout << summary.str() << std::flush;
+    std::cerr << summary.str();
 
     return 0;
 }

@@ -1,0 +1,18 @@
+# Build artifacts
+build/
+qaoa_main
+*.o
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+venv/
+
+# Editor / OS
+.vscode/
+.idea/
+.DS_Store
+
+# Spreadsheet exports
+*.xlsx

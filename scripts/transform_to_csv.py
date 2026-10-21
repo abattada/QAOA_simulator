@@ -1,36 +1,39 @@
-import re
-import csv
-import argparse
+"""Convert a raw grid-search log into a CSV file next to it.
 
-parser = argparse.ArgumentParser()
-parser.add_argument("file_name", help="Input file name")
+Columns: Gamma, Beta, Expected Cut, P(opt) and, when the run drew samples,
+Sampled Max Cut. Rows are sorted by (Gamma, Beta).
+
+Usage:
+    python3 scripts/transform_to_csv.py results/qml_bi_10/1000_20_0
+"""
+import argparse
+import csv
+import re
+
+NUM = r"([0-9.eE+-]+)"
+LINE_RE = re.compile(
+    rf"Gamma:\s*{NUM},\s*Beta:\s*{NUM},\s*Expected Cut:\s*{NUM},\s*P\(opt\):\s*{NUM}"
+    rf"(?:,\s*Sampled Max Cut:\s*{NUM})?")
+
+parser = argparse.ArgumentParser(description=__doc__,
+                                 formatter_class=argparse.RawDescriptionHelpFormatter)
+parser.add_argument("file_name", help="raw simulator output file")
 args = parser.parse_args()
 
-# 1. 讀取原始資料
-with open(args.file_name, 'r', encoding='utf-8') as f:
-    lines = f.readlines()
+with open(args.file_name, "r", encoding="utf-8") as f:
+    rows = [m.groups() for m in map(LINE_RE.search, f) if m]
 
-# 2. 準備正則表達式，用來擷取 Gamma, Beta, Tmp Cut 數值
-pattern = re.compile(r'Gamma:\s*([0-9.+-Ee]+),\s*Beta:\s*([0-9.+-Ee]+),\s*Max Cut:\s*([0-9.+-Ee]+)')
+if not rows:
+    raise SystemExit(f"no grid lines found in {args.file_name}")
 
-# 3. 建立一個 list 來存放解析後的資料
-parsed_data = []
-for line in lines:
-    match = pattern.search(line)
-    if match:
-        gamma_str, beta_str, tmp_cut_str = match.groups()
-        parsed_data.append([gamma_str, beta_str, tmp_cut_str])
+sampled = rows[0][4] is not None
+header = ["Gamma", "Beta", "Expected Cut", "P(opt)"] + (["Sampled Max Cut"] if sampled else [])
+rows = [r if sampled else r[:4] for r in rows]
+rows.sort(key=lambda r: (float(r[0]), float(r[1])))
 
-# 3.1 將字串轉成浮點數後進行排序 (先 Gamma，再 Beta)
-#     如果 Gamma 或 Beta 是整數也沒關係，float() 同樣能處理。
-parsed_data.sort(key=lambda x: (float(x[0]), float(x[1])))
-
-# 4. 將資料寫入 CSV 檔案 (Excel 可讀取)
-with open(args.file_name+'.csv', 'w', newline='', encoding='utf-8') as csvfile:
+with open(args.file_name + ".csv", "w", newline="", encoding="utf-8") as csvfile:
     writer = csv.writer(csvfile)
-    # 寫入欄位名稱
-    writer.writerow(["Gamma", "Beta", "Max Cut"])
-    # 寫入每一行資料
-    writer.writerows(parsed_data)
+    writer.writerow(header)
+    writer.writerows(rows)
 
-print(f"wrote {args.file_name}.csv ({len(parsed_data)} rows)")
+print(f"wrote {args.file_name}.csv ({len(rows)} rows)")

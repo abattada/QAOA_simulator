@@ -1,15 +1,15 @@
 """Render a (gamma, beta) grid-search landscape as a heatmap.
 
 Reads a raw simulator output file (results/<graph>/<shots>_<steps>_<run>),
-pivots the grid into a matrix and draws the cut value found at every
+pivots the grid into a matrix and draws the exact expected cut <C> at every
 (gamma, beta) sample, with the best parameter point ringed.
 
 By default the image is written next to the result file
-(results/qml_bi_10/1_20_0 -> results/qml_bi_10/1_20_0.png); pass -o to
+(results/qml_bi_10/1000_20_0 -> results/qml_bi_10/1000_20_0.png); pass -o to
 regenerate the README gallery figures in docs/figures/heatmaps/.
 
 Usage:
-    python3 scripts/plot_heatmap.py results/qml_bi_10/1_20_0 [-o out.png]
+    python3 scripts/plot_heatmap.py results/qml_bi_10/1000_20_0 [-o out.png]
 """
 import argparse
 import re
@@ -22,7 +22,7 @@ from plot_style import (INK_MUTED, INK_PRIMARY, INK_SECONDARY, SEQ_BLUE,
                         SURFACE, style_figure)
 
 LINE_RE = re.compile(
-    r"Gamma:\s*([0-9.eE+-]+),\s*Beta:\s*([0-9.eE+-]+),\s*Max Cut:\s*([0-9.eE+-]+)")
+    r"Gamma:\s*([0-9.eE+-]+),\s*Beta:\s*([0-9.eE+-]+),\s*Expected Cut:\s*([0-9.eE+-]+)")
 
 PI_TICKS = [0, np.pi / 4, np.pi / 2, 3 * np.pi / 4, np.pi]
 PI_LABELS = ["0", "π/4", "π/2", "3π/4", "π"]
@@ -35,7 +35,9 @@ def parse_result(path):
     for key, pattern in [
         ("qubits", r"QAOA \(p=1\) with (\d+) qubits"),
         ("edges", r"edges=(\d+)"),
-        ("best_cut", r"Best found cut\s*=\s*([0-9.]+)"),
+        ("max_cut", r"True max cut\s*=\s*([0-9.]+)"),
+        ("best_cut", r"Best expected cut\s*=\s*([0-9.eE+-]+)"),
+        ("ratio", r"Approx ratio\s*=\s*([0-9.eE+-]+)"),
         ("best_gamma", r"Best gamma\s*=\s*([0-9.]+)"),
         ("best_beta", r"Best beta\s*=\s*([0-9.]+)"),
     ]:
@@ -67,7 +69,7 @@ def main():
     ax.set_facecolor(SURFACE)
 
     mesh = ax.pcolormesh(gammas, betas, grid, cmap=SEQ_BLUE,
-                         edgecolors=SURFACE, linewidth=0.6, vmin=0)
+                         edgecolors=SURFACE, linewidth=0.6)
 
     # Ring the best (gamma, beta) sample: white halo + ink ring, never colour alone
     ax.scatter([meta["best_gamma"]], [meta["best_beta"]], s=170,
@@ -84,16 +86,16 @@ def main():
     ax.set_ylabel("β", color=INK_SECONDARY, fontsize=12, rotation=0, labelpad=10)
 
     cbar = fig.colorbar(mesh, ax=ax, pad=0.02)
-    cbar.set_label("cut value", color=INK_SECONDARY, fontsize=10)
+    cbar.set_label("expected cut ⟨C⟩", color=INK_SECONDARY, fontsize=10)
     cbar.ax.tick_params(colors=INK_MUTED, labelcolor=INK_SECONDARY, labelsize=9)
     cbar.outline.set_visible(False)
 
     n = int(meta["qubits"])
     ax.set_title(f"{meta['graph']} — {n} qubits, {int(meta['edges'])} edges",
                  color=INK_PRIMARY, fontsize=13, pad=28, loc="left")
-    ax.text(0, 1.02, f"best cut {int(meta['best_cut'])} at "
-            f"γ={meta['best_gamma']:.2f}, β={meta['best_beta']:.2f}"
-            f"  (○)",
+    ax.text(0, 1.02, f"best ⟨C⟩ {meta['best_cut']:.2f} of max cut {int(meta['max_cut'])} "
+            f"(ratio {meta['ratio']:.3f}) at "
+            f"γ={meta['best_gamma']:.2f}, β={meta['best_beta']:.2f}  (○)",
             transform=ax.transAxes, color=INK_MUTED, fontsize=9)
 
     out = args.output or f"{args.result_file}.png"

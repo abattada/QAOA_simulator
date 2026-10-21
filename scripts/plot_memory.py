@@ -1,16 +1,16 @@
 """Plot the memory footprint comparison against QuEST as a dot plot.
 
-Values are peak resident memory read from the system monitor while each
-simulator ran the same grid search (screenshots in
-benchmarks/memory_screenshots/). QAOA_simulator evaluates ~12 grid points
-concurrently — one state vector per OpenMP thread — so its footprint is
-roughly 12 state vectors versus QuEST's single one: memory traded for
-wall-clock speed.
+QAOA_simulator values are peak resident set sizes measured by
+scripts/run_benchmarks.sh (benchmarks/my_memory_record.txt): one state
+vector plus the 2-byte-per-bitstring cut table. QuEST values were read from
+the system monitor during an earlier run (screenshots in
+benchmarks/memory_screenshots/quest_*.png).
 
 Usage:
     python3 scripts/plot_memory.py [-o docs/figures/memory_benchmark.png]
 """
 import argparse
+import re
 from pathlib import Path
 
 import matplotlib.pyplot as plt
@@ -19,14 +19,23 @@ from plot_style import (C_MYSIM, C_QUEST, INK_MUTED, INK_PRIMARY,
                         INK_SECONDARY, style_axes, style_figure)
 
 QUBITS = [18, 20, 22]
-MYSIM_MB = [49.6, 201.2, 805.4]
 QUEST_MB = [4.1, 33.0, 66.8]
+MEMORY_RECORD = Path("benchmarks/my_memory_record.txt")
+
+
+def read_mysim_mb():
+    """{k: maxrss_mb} from the record; key k = graph qml_bi_k = 2k qubits."""
+    entries = re.findall(r"(\d+):\s*\{\s*maxrss_mb:\s*([0-9.]+)\s*\}",
+                         MEMORY_RECORD.read_text())
+    by_qubits = {2 * int(k): float(mb) for k, mb in entries}
+    return [by_qubits[q] for q in QUBITS]
 
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("-o", "--output", default="docs/figures/memory_benchmark.png")
     args = parser.parse_args()
+    mysim_mb = read_mysim_mb()
 
     fig, ax = plt.subplots(figsize=(8, 3.2))
     style_figure(fig)
@@ -34,9 +43,9 @@ def main():
 
     rows = range(len(QUBITS))
     ax.scatter(QUEST_MB, rows, s=70, color=C_QUEST, zorder=3, label="QuEST")
-    ax.scatter(MYSIM_MB, rows, s=70, color=C_MYSIM, zorder=3,
-               label="QAOA_simulator (12 concurrent grid points)")
-    for y, (mine, quest) in zip(rows, zip(MYSIM_MB, QUEST_MB)):
+    ax.scatter(mysim_mb, rows, s=70, color=C_MYSIM, zorder=3,
+               label="QAOA_simulator (single state + cut table)")
+    for y, (mine, quest) in zip(rows, zip(mysim_mb, QUEST_MB)):
         ax.text(mine, y + 0.22, f"{mine:g} MB", ha="center",
                 color=INK_SECONDARY, fontsize=9)
         ax.text(quest, y + 0.22, f"{quest:g} MB", ha="center",

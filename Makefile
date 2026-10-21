@@ -1,6 +1,6 @@
 # Compiler and flags
 CXX      = g++
-CXXFLAGS = -std=c++17 -Wall -O2 -fopenmp
+CXXFLAGS = -std=c++17 -O3 -march=native -fopenmp -Wall -Wextra
 
 # Layout
 SRC_DIR   = src

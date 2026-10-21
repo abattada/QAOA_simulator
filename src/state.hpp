@@ -1,11 +1,6 @@
 #ifndef _STATE_HPP_
 #define _STATE_HPP_
 
-#include <cstring>
-#include <cstdio>
-#include <vector>
-#include <iostream>
-
 typedef unsigned long long ull;
 
 typedef struct {
@@ -18,7 +13,14 @@ typedef struct {
     ull numAmpTotal;
 } State;
 
-void createState(State& state, const int& numQubits);
+// Allocate 2^numQubits amplitudes (64-byte aligned) without initialising them.
+// Returns false if the allocation fails.
+bool allocState(State& state, int numQubits);
+
+// Allocate and initialise to |0...0>. Returns false if the allocation fails.
+bool createState(State& state, int numQubits);
+
 void printState(const State& state, int num);
-void destroyState(const State& state);
+void destroyState(State& state);
+
 #endif

@@ -1,270 +1,158 @@
+#include <algorithm>
 #include <cmath>
+#include <cstdio>
+#include <filesystem>
+#include <iomanip>
+#include <iostream>
+#include <random>
+#include <sstream>
 #include <string>
-#include <fstream>
-#include <random> 
-#include <filesystem> 
-#include <omp.h> 
+#include <vector>
+
+#include <omp.h>
+
+#include "qaoa.hpp"
 #include "state.hpp"
-#include "circuit.hpp"
 
-using namespace std;
+// p=1 QAOA for MaxCut with an exhaustive (gamma, beta) grid search.
+//
+// Per grid point: build e^{-i gamma C} H^n |0> in one pass from the cut table,
+// apply Rx(2 beta) to every qubit (cache-blocked), then compute <C> and the
+// probability of an optimal cut exactly, and optionally draw `shots` exact
+// samples. One state vector is reused for the whole grid; all parallelism is
+// inside the kernels.
 
-// (1) Perform H gate on every node
-void initHGates(State& state, const int& numQubits) {
-    for(int q = 0; q < numQubits; q++){
-        hGate(state, q);
+static bool parseInt(const char* s, long long& out) {
+    try {
+        size_t pos = 0;
+        out = std::stoll(s, &pos);
+        return pos == std::string(s).size();
+    } catch (...) {
+        return false;
     }
 }
-
-// (2) Apply cost Hamiltonian for all edges
-void applyCostHamiltonian(State& state, const std::vector<std::pair<int,int>>& edges, double gamma) {
-    for (auto & e : edges) {
-        int i = e.first;
-        int j = e.second;
-        cnotGate(state, i, j);
-        rzGate(state, j, 2.0 * gamma);
-        cnotGate(state, i, j);
-    }
-}
-
-// (3) Apply mixing Hamiltonian: H_B = Σ X_i -> each qubit rotateX(2 * beta)
-void applyMixingHamiltonian(State& state, const int& numQubits, double beta) {
-    for (int q=0; q<numQubits; q++) {
-        rxGate(state, q, 2.0 * beta);
-    }
-}
-
-// (4) Calculate cut value from measurement result
-int calcCutValue(const std::vector<int>& measureRes,
-                 const std::vector<std::pair<int,int>>& edges) {
-    int cutCount = 0;
-    for (auto & e : edges) {
-        if (measureRes[e.first] != measureRes[e.second]) {
-            cutCount++;
-        }
-    }
-    return cutCount;
-}
-
-// (5) Evaluate circuit via multiple shots, returning average cut value
-double evaluateQaoaCircuit(State& state,
-                           const std::vector<std::pair<int, int>>& edges,
-                           int shots, 
-                           int numQubits) {
-    int maxCut = 0;
-
-    // 1) Precompute probability of measuring |0> for each qubit, in parallel
-    std::vector<double> prob0(numQubits, 0.0);
-
-    #pragma omp parallel for
-    for (int q = 0; q < numQubits; ++q) {
-        double localProb0 = 0.0;
-
-        // Optionally vectorize the loop over amplitudes
-        #pragma omp simd
-        for (ull i = 0; i < state.numAmpTotal; ++i) {
-            // If the q-th qubit of index i is 0, add amplitude²
-            if (((i >> q) & 1) == 0) {
-                localProb0 += state.stateVec[i].real * state.stateVec[i].real +
-                              state.stateVec[i].imag * state.stateVec[i].imag;
-            }
-        }
-        prob0[q] = localProb0;
-    }
-
-    // 2) Parallelize over shots to measure each qubit and compute cut
-    //    We'll do a manual reduction on maxCut
-    #pragma omp parallel
-    {
-        // Each thread has its own RNG
-        std::mt19937_64 rng(std::time(nullptr) + 13 * omp_get_thread_num());
-        std::uniform_real_distribution<double> dist(0.0, 1.0);
-
-        int localMaxCut = 0;
-
-        #pragma omp for
-        for (int shot = 0; shot < shots; ++shot) {
-
-            std::vector<int> measurementResults(numQubits);
-
-            // 2a) For each qubit, sample from precomputed probability prob0[q]
-            for (int q = 0; q < numQubits; ++q) {
-                double randVal = dist(rng);
-                measurementResults[q] = (randVal <= prob0[q]) ? 0 : 1;
-            }
-
-            // 2b) Compute the cut value for this measurement
-            int tmp = calcCutValue(measurementResults, edges);
-            if (tmp > localMaxCut) {
-                localMaxCut = tmp;
-            }
-        }
-
-        // 2c) Reduce into a global maxCut
-        #pragma omp critical
-        {
-            if (localMaxCut > maxCut) {
-                maxCut = localMaxCut;
-            }
-        }
-    }
-
-    return maxCut;
-}
-
-
 
 int main(int argc, char* argv[]) {
-
-    if (argc < 4) {
-        std::cerr << "Usage: " << argv[0] 
-                  << " <input_file> <shots> <steps>" 
-                  << std::endl;
+    if (argc < 4 || argc > 5) {
+        std::cerr << "Usage: " << argv[0] << " <graph_name> <shots> <steps> [seed]\n"
+                  << "  <graph_name>  file in ./graph/\n"
+                  << "  <shots>       exact samples per grid point (0 = no sampling)\n"
+                  << "  <steps>       grid resolution: steps x steps points over (gamma, beta) in [0, pi]^2\n"
+                  << "  [seed]        base RNG seed for sampling (default 1)\n";
         return 1;
     }
 
-    // 用 stoi() 轉成整數
-    std::string input_name = argv[1];
-    std::string file_path = "./graph/" + input_name;
-    int shots = std::stoi(argv[2]);   // Number of measurement repetitions
-    int steps = std::stoi(argv[3]);   // Grid search resolution for gamma, beta
+    const std::string inputName = argv[1];
+    long long shotsArg = 0, stepsArg = 0, seedArg = 1;
+    if (!parseInt(argv[2], shotsArg) || shotsArg < 0 || shotsArg > 100000000) {
+        std::cerr << "Error: <shots> must be an integer in 0..1e8\n";
+        return 1;
+    }
+    if (!parseInt(argv[3], stepsArg) || stepsArg < 1 || stepsArg > 10000) {
+        std::cerr << "Error: <steps> must be an integer in 1..10000\n";
+        return 1;
+    }
+    if (argc == 5 && !parseInt(argv[4], seedArg)) {
+        std::cerr << "Error: [seed] must be an integer\n";
+        return 1;
+    }
+    const int shots = static_cast<int>(shotsArg);
+    const int steps = static_cast<int>(stepsArg);
+    const uint64_t baseSeed = static_cast<uint64_t>(seedArg);
 
-    // 建立輸出目錄, e.g. ./results/<input_file_name>/<shots>/
+    // Read the graph before creating any output file
+    Graph graph;
+    std::string err;
+    if (!loadGraph("./graph/" + inputName, graph, err)) {
+        std::cerr << "Error: " << err << "\n";
+        return 1;
+    }
+    const int n = graph.n;
+    const int m = static_cast<int>(graph.edges.size());
+
+    // Output file results/<graph>/<shots>_<steps>_<run>, first unused run index
     namespace fs = std::filesystem;
-    fs::path output_dir = fs::path("results") 
-                          / input_name ;
-    fs::create_directories(output_dir);
+    fs::path outputDir = fs::path("results") / inputName;
+    fs::create_directories(outputDir);
     fs::path candidate;
-    // 找到尚未存在的檔名 steps_<increment>
-    int increment = 0;
-    while (true) {
-        // 您可以自行決定是否要加檔名副檔名，如 .txt 或 .log
-        candidate = output_dir 
-                             / (std::to_string(shots) + "_" + std::to_string(steps) + "_" 
-                                + std::to_string(increment) );
-        if (!fs::exists(candidate)) {
-            // 找到可用的檔名後，將 stdout 導向該檔案
-            if (!freopen(candidate.string().c_str(), "w", stdout)) {
-                std::cerr << "Error: could not open output file "
-                          << candidate.string() << std::endl;
-                return 1;
-            }
-            break;
-        }
-        increment++;
+    for (int run = 0;; run++) {
+        candidate = outputDir / (std::to_string(shots) + "_" + std::to_string(steps) + "_" + std::to_string(run));
+        if (!fs::exists(candidate)) break;
     }
-
-    // 接下來開始讀取圖形資料
-    FILE *f = fopen(file_path.c_str(), "r");
-    if (!f) {
-        std::cerr << "Error: could not open file " << file_path << std::endl;
+    if (!freopen(candidate.string().c_str(), "w", stdout)) {
+        std::cerr << "Error: could not open output file " << candidate.string() << "\n";
         return 1;
     }
 
-    int numQubits = 0;
-    int numEdges = 0;
-    if (fscanf(f, "%d", &numQubits) != 1 || fscanf(f, "%d", &numEdges) != 1) {
-        std::cerr << "Error: malformed graph file header in " << file_path << std::endl;
+    const double t0 = omp_get_wtime();
+    int maxCut = 0;
+    const std::vector<uint16_t> cut = buildCutTable(graph, maxCut);
+    const double tCut = omp_get_wtime() - t0;
+
+    State state;
+    if (!allocState(state, n)) {
+        std::cerr << "Error: could not allocate the state vector for " << n << " qubits\n";
         return 1;
     }
 
-    std::vector<std::pair<int,int>> edges;
-    edges.reserve(numEdges);
-    for (int i = 0; i < numEdges; i++) {
-        int a, b;
-        if (fscanf(f, "%d %d", &a, &b) != 2) {
-            std::cerr << "Error: malformed edge list in " << file_path << std::endl;
-            return 1;
-        }
-        edges.push_back({a, b});
-    }
-    fclose(f);
+    double bestExpected = -1.0, bestGamma = 0.0, bestBeta = 0.0, pOptAtBest = 0.0;
+    int bestSampled = -1;
 
-    double bestCut = -1;   
-    double bestGamma = 0;
-    double bestBeta = 0;
-
-    std::vector<std::string> lines(steps * steps);
-
-    // Parallel over (ig, ib)
-    #pragma omp parallel for collapse(2) schedule(dynamic)
     for (int ig = 0; ig < steps; ig++) {
         for (int ib = 0; ib < steps; ib++) {
+            const double gamma = (steps == 1) ? 0.0 : M_PI * double(ig) / (steps - 1);
+            const double beta  = (steps == 1) ? 0.0 : M_PI * double(ib) / (steps - 1);
 
-            double gamma = M_PI * (double(ig) / (steps - 1));
-            if (steps == 1) {
-                gamma = 0.0;
+            applyCostLayer(state, cut, m, gamma);
+            applyMixingLayer(state, n, beta);
+
+            // Deterministic per-point seed, independent of the thread count
+            std::mt19937_64 rng(splitmix64(baseSeed) ^ splitmix64(uint64_t(ig) * steps + ib + 1));
+            const Measurement r = measure(state, cut, maxCut, shots, rng);
+
+            if (r.expectedCut > bestExpected) {
+                bestExpected = r.expectedCut;
+                bestGamma = gamma;
+                bestBeta = beta;
+                pOptAtBest = r.pOpt;
             }
-            double beta  = M_PI * (double(ib) / (steps - 1));
-            if (steps == 1) {
-                beta = 0.0;
-            }
+            bestSampled = std::max(bestSampled, r.sampledMaxCut);
 
-            // (0) Initialize to |000...0>
-            State state;
-            createState(state, numQubits);
-
-            // (1) Apply Hadamard on all qubits -> get |++++...+>
-            initHGates(state, numQubits);
-
-            // (2) Cost Hamiltonian
-            applyCostHamiltonian(state, edges, gamma);
-
-            // (3) Mixing Hamiltonian
-            applyMixingHamiltonian(state, numQubits, beta);
-
-            // (4) Evaluate with multiple shots
-            double maxCut = evaluateQaoaCircuit(state, edges, shots, numQubits);
-
-            // Thread-safe update of the global best
-            #pragma omp critical
-            {
-                if (maxCut > bestCut) {
-                    bestCut   = maxCut;
-                    bestGamma = gamma;
-                    bestBeta  = beta;
-                }
-            }
-
-            // Build the line you want to output
-            std::stringstream ss;
-            ss << "Gamma: " << gamma
-            << ", Beta: "  << beta
-            << ", Max Cut: " << maxCut;
-
-            // Store in our buffer at index (ig * steps + ib)
-            lines[ig * steps + ib] = ss.str();
-
-            // Clean up
-            destroyState(state);
+            std::cout << "Gamma: " << gamma << ", Beta: " << beta
+                      << std::setprecision(12)
+                      << ", Expected Cut: " << r.expectedCut
+                      << ", P(opt): " << r.pOpt;
+            if (shots > 0) std::cout << ", Sampled Max Cut: " << r.sampledMaxCut;
+            std::cout << std::setprecision(6) << "\n";
         }
     }
+    destroyState(state);
+    const double wall = omp_get_wtime() - t0;
 
-    // Now, after the parallel region finishes, we output lines in ascending (ig, ib) order
-    // This ensures the same iteration order as a serial loop would have printed.
-    for (int ig = 0; ig < steps; ig++) {
-        for (int ib = 0; ib < steps; ib++) {
-            std::cout << lines[ig * steps + ib] << "\n";
-        }
-    }
-
-    // Output summary: once into the results file (stdout), once to the
-    // terminal (stderr), so it stays visible even when stdout is redirected.
+    // Summary: once into the results file (stdout), once to the terminal (stderr)
     std::stringstream summary;
+    summary << std::setprecision(6);
     summary << "=========================================\n";
-    summary << " QAOA (p=1) with " << numQubits << " qubits.\n";
-    summary << " Input graph: " << input_name
-            << " (edges=" << edges.size() << ")\n";
-    summary << " Grid search steps = " << steps
-            << ", shots = " << shots << "\n";
+    summary << " QAOA (p=1) with " << n << " qubits.\n";
+    summary << " Input graph: " << inputName << " (edges=" << m << ")\n";
+    summary << " Grid search steps = " << steps << ", shots = " << shots
+            << ", seed = " << baseSeed << "\n";
     summary << "-----------------------------------------\n";
-    summary << " Best found cut   = " << bestCut << "\n";
-    summary << " Best gamma       = " << bestGamma << "\n";
-    summary << " Best beta        = " << bestBeta  << "\n";
+    summary << " True max cut      = " << maxCut << "\n";
+    summary << " Best expected cut = " << bestExpected << "\n";
+    if (maxCut > 0) summary << " Approx ratio      = " << bestExpected / maxCut << "\n";
+    else            summary << " Approx ratio      = n/a\n";
+    summary << " P(opt) at best    = " << pOptAtBest << "\n";
+    if (shots > 0)  summary << " Best sampled cut  = " << bestSampled << "\n";
+    summary << " Best gamma        = " << bestGamma << "\n";
+    summary << " Best beta         = " << bestBeta << "\n";
     summary << "=========================================\n";
 
     std::cout << summary.str() << std::flush;
-    std::cerr << summary.str();
-
+    // Timing goes to the terminal only, so result files are reproducible
+    std::cerr << summary.str()
+              << " OpenMP threads = " << omp_get_max_threads()
+              << ", wall time = " << std::fixed << std::setprecision(2) << wall
+              << " s (cut table " << tCut << " s)\n";
     return 0;
 }

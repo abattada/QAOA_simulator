@@ -1,0 +1,46 @@
+{
+    2:
+    {
+        maxrss_mb:	4.7
+    },
+    3:
+    {
+        maxrss_mb:	4.6
+    },
+    4:
+    {
+        maxrss_mb:	4.6
+    },
+    5:
+    {
+        maxrss_mb:	4.4
+    },
+    6:
+    {
+        maxrss_mb:	4.5
+    },
+    7:
+    {
+        maxrss_mb:	4.3
+    },
+    8:
+    {
+        maxrss_mb:	5.2
+    },
+    9:
+    {
+        maxrss_mb:	8.6
+    },
+    10:
+    {
+        maxrss_mb:	22.0
+    },
+    11:
+    {
+        maxrss_mb:	76.3
+    },
+    12:
+    {
+        maxrss_mb:	292.0
+    }
+}

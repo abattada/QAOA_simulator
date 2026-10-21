@@ -1,65 +1,57 @@
 {
     2:
     {
-        real:	0m0.005s,
-        user:	0m0.015s
+        real:	0m0.030s,
+        user:	0m0.160s
     },
     3:
     {
-        real:	0m0.006s,
-        user:	0m0.024s
+        real:	0m0.030s,
+        user:	0m0.150s
     },
     4:
     {
-        real:	0m0.009s,
-        user:	0m0.068s
+        real:	0m0.030s,
+        user:	0m0.180s
     },
     5:
     {
-        real:	0m0.031s,
-        user:	0m0.309s
-
+        real:	0m0.030s,
+        user:	0m0.200s
     },
     6:
     {
-        real:	0m0.148s,
-        user:	0m1.710s
+        real:	0m0.040s,
+        user:	0m0.240s
     },
     7:
     {
-        real:	0m0.776s,
-        user:	0m9.128s
-
+        real:	0m0.070s,
+        user:	0m0.390s
     },
     8:
     {
-        real:	0m4.062s,
-        user:	0m48.059s
-
+        real:	0m0.160s,
+        user:	0m0.950s
     },
     9:
     {
-        real:	0m21.329s,
-        user:	4m12.455s
-
+        real:	0m0.550s,
+        user:	0m3.280s
     },
     10:
     {
-        real:	2m12.202s,
-        user:	25m43.121s
-
+        real:	0m2.420s,
+        user:	0m14.450s
     },
     11:
     {
-        real:	11m1.137s,
-        user:	129m8.744s
-
+        real:	0m15.960s,
+        user:	1m35.610s
     },
     12:
     {
-        real:	51m52.128s,
-        user:	607m29.901s
-
+        real:	1m13.870s,
+        user:	7m21.720s
     }
-
 }
